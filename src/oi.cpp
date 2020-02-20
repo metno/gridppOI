@@ -3,60 +3,7 @@
 #include <algorithm>
 #include <armadillo>
 #include <assert.h>
-// float gridppOI::MV = -999;
-/*
-mVLength(100),
-    mHLength(30000),
-    mHLengthC(10000),
-    mMu(0.9),
-    mMinRho(0.0013),
-    mEpsilon(0.5),
-    mEpsilonC(0.5),
-    mElevGradient(-999),
-    mBiasVariable(""),
-    mSigma(1),
-    mSigmaC(1),
-    mDelta(1),
-    mC(1.03),
-    mSaveDiff(false),
-    mDeltaVariable(""),
-    mUseEns(true),
-    // Add mDeltaVariable
-    mX(MV),
-    mY(MV),
-    mMaxLocations(20),
-    mNumVariable(""),
-    mMaxElevDiff(200),
-    // Default model error variance
-    mMinValidEns(5),
-    mNewDeltaVar(1),
-    mExtrapolate(false),
-    mDiagnose(false),
-    mWMin(0.5),
-    mLambda(0.5),
-    mCrossValidate(false),
-    mMaxBytes(6.0 * 1024 * 1024 * 1024),
-    mLandOnly(false),
-    mTransformType(TransformTypeNone),
-    mDiaFile(""),
-    mGamma(0.25) {
-*/
 
-// Set up convenient functions for debugging in gdb
-// template<class Matrix>
-// void print_matrix(Matrix matrix) {
-//     matrix.print(std::cout);
-// }
-
-// template void print_matrix<CalibratorOi::mattype>(CalibratorOi::mattype matrix);
-// template void print_matrix<CalibratorOi::cxtype>(CalibratorOi::cxtype matrix);
-void gridppOI::debug(std::string string) {
-    std::cout << string << std::endl;
-}
-
-void gridppOI::error(std::string string) {
-    std::cout << string << std::endl;
-}
 bool gridppOI::optimal_interpolation(const vec2& input,
         const vec2& blats,
         const vec2& blons,
@@ -78,26 +25,37 @@ bool gridppOI::optimal_interpolation(const vec2& input,
         float elevGradient,
         float epsilon,
         vec2& output) {
+
     std::cout << "Starting" << std::endl;
+
     int nY = input.size();
     int nX = input[0].size();
+    int nS = pobs.size();
+
+    // Check input data
+    check_vec(blats, nY, nX);
+    check_vec(blons, nY, nX);
+    check_vec(belevs, nY, nX);
+    check_vec(blafs, nY, nX);
+    check_vec(pci, nS);
+    check_vec(plats, nS);
+    check_vec(plons, nS);
+    check_vec(pelevs, nS);
+    check_vec(plafs, nS);
+
+    // Prepare output matrix
     output.resize(nY);
     for(int y = 0; y < nY; y++) {
         output[y].resize(nX);
     }
 
-    int mX = 10;
-    int mY = 10;
     float MV = -999;
 
-    // Find the grid configuration: regular or irregular
-    // For regular grids, we can do certain optimizations
-    int gS = pobs.size();
+    // Estimate the grid spacing
     float gridSize = getDistance(blats[0][0], blons[0][0], blats[1][0], blons[1][0], false);
     std::stringstream ss;
     ss << "Grid size: " << gridSize << " m";
     debug(ss.str());
-    bool isRegularGrid = isValid(gridSize);
 
     // Loop over each observation, find the nearest gridpoint and place the obs into all gridpoints
     // in the vicinity of the nearest neighbour. This is only meant to be an approximation, but saves
@@ -105,8 +63,8 @@ bool gridppOI::optimal_interpolation(const vec2& input,
 
     // Store the indicies (into the gLocations array) that a gridpoint has available
     std::vector<std::vector<std::vector<int> > > gLocIndices; // Y, X, obs indices
-    std::vector<float> pYi(gS, MV);
-    std::vector<float> pXi(gS, MV);
+    std::vector<float> pYi(nS, MV);
+    std::vector<float> pXi(nS, MV);
     gLocIndices.resize(nY);
     for(int y = 0; y < nY; y++) {
         gLocIndices[y].resize(nX);
@@ -117,13 +75,9 @@ bool gridppOI::optimal_interpolation(const vec2& input,
     float radiusFactor = sqrt(-2*log(minRho));
 
     // Spread each observation out to this many gridpoints from the nearest neighbour
+    int gridpointRadius = radiusFactor * hlength / gridSize;
 
-    // Check that we do not run out of memory
-    int gridpointRadius = MV;
-    gridpointRadius = radiusFactor * hlength / gridSize;
-
-    // For each gridpoint, find which observations are relevant. Parse the observations and only keep
-    // those that pass certain checks
+    // Vectorize the matrix of grid points
     vec blats0(nX * nY);
     vec blons0(nX * nY);
     int count = 0;
@@ -134,10 +88,14 @@ bool gridppOI::optimal_interpolation(const vec2& input,
             count++;
         }
     }
+
     std::cout << "Before search tree" << std::endl;
     gridppOI::KDTree searchTree(blats0, blons0);
     std::cout << "Done search tree" << std::endl;
-    for(int i = 0; i < gS; i++) {
+
+    // For each gridpoint, find which observations are relevant. Parse the observations and only keep
+    // those that pass certain checks
+    for(int i = 0; i < nS; i++) {
         int index = searchTree.get_nearest_neighbour(plats[i], plons[i]);
         // TODO: Check
         int X = index / nY;
@@ -166,21 +124,18 @@ bool gridppOI::optimal_interpolation(const vec2& input,
     std::cout << "Done indexing" << std::endl;
 
     // Transform the background
-    /*
-    #pragma omp parallel for
-    for(int x = 0; x < nX; x++) {
-        for(int y = 0; y < nY; y++) {
-            float value = input[y][x];
-            if(isValid(value))
-                input[y][x] = gridppOI::transform(value);
-        }
-    }
-    */
+    // #pragma omp parallel for
+    // for(int x = 0; x < nX; x++) {
+    //     for(int y = 0; y < nY; y++) {
+    //         float value = input[y][x];
+    //         if(isValid(value))
+    //             input[y][x] = gridppOI::transform(value);
+    //     }
+    // }
 
     // Compute Y
-    vec gY(gS);
-    std::vector<float> gYhat(gS);
-    for(int i = 0; i < gS; i++) {
+    vec gY(nS);
+    for(int i = 0; i < nS; i++) {
         float elevCorr = 0;
         if(isValid(elevGradient) && elevGradient != 0) {
             float nnElev = belevs[pYi[i]][pXi[i]];
@@ -203,9 +158,7 @@ bool gridppOI::optimal_interpolation(const vec2& input,
             float elev = belevs[y][x];
             float laf = blafs[y][x];
 
-            //
             // Create list of locations for this gridpoint
-            //
             std::vector<int> lLocIndices0 = gLocIndices[y][x];
             std::vector<int> lLocIndices;
             lLocIndices.reserve(lLocIndices0.size());
@@ -397,6 +350,36 @@ float gridppOI::deg2rad(float deg) {
 float gridppOI::rad2deg(float rad) {
    float pi = 3.14159265;
    return (rad * 180 / pi);
+}
+// Set up convenient functions for debugging in gdb
+// template<class Matrix>
+// void print_matrix(Matrix matrix) {
+//     matrix.print(std::cout);
+// }
+
+// template void print_matrix<CalibratorOi::mattype>(CalibratorOi::mattype matrix);
+// template void print_matrix<CalibratorOi::cxtype>(CalibratorOi::cxtype matrix);
+void gridppOI::debug(std::string string) {
+    std::cout << string << std::endl;
+}
+
+void gridppOI::error(std::string string) {
+    std::cout << string << std::endl;
+}
+void gridppOI::check_vec(vec2 input, int Y, int X) {
+    assert(input.size() == Y);
+    for(int i = 0; i < input.size(); i++) {
+        assert(input[i].size() == X);
+        for(int j = 0; j < input[i].size(); j++) {
+            assert(isValid(input[i][j]));
+        }
+    }
+}
+void gridppOI::check_vec(vec input, int S) {
+    assert(input.size() == S);
+    for(int i = 0; i < input.size(); i++) {
+        assert(isValid(input[i]));
+    }
 }
 /*
 float transform(float iValue) const {
