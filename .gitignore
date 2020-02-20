@@ -1,0 +1,7 @@
+.nfs*
+.*.swp
+*~
+*.o
+build
+*.pyc
+deps

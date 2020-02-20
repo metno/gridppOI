@@ -1,0 +1,431 @@
+#include "gridppOI.h"
+#include <math.h>
+#include <algorithm>
+#include <armadillo>
+#include <assert.h>
+// float gridppOI::MV = -999;
+/*
+mVLength(100),
+    mHLength(30000),
+    mHLengthC(10000),
+    mMu(0.9),
+    mMinRho(0.0013),
+    mEpsilon(0.5),
+    mEpsilonC(0.5),
+    mElevGradient(-999),
+    mBiasVariable(""),
+    mSigma(1),
+    mSigmaC(1),
+    mDelta(1),
+    mC(1.03),
+    mSaveDiff(false),
+    mDeltaVariable(""),
+    mUseEns(true),
+    // Add mDeltaVariable
+    mX(MV),
+    mY(MV),
+    mMaxLocations(20),
+    mNumVariable(""),
+    mMaxElevDiff(200),
+    // Default model error variance
+    mMinValidEns(5),
+    mNewDeltaVar(1),
+    mExtrapolate(false),
+    mDiagnose(false),
+    mWMin(0.5),
+    mLambda(0.5),
+    mCrossValidate(false),
+    mMaxBytes(6.0 * 1024 * 1024 * 1024),
+    mLandOnly(false),
+    mTransformType(TransformTypeNone),
+    mDiaFile(""),
+    mGamma(0.25) {
+*/
+
+// Set up convenient functions for debugging in gdb
+// template<class Matrix>
+// void print_matrix(Matrix matrix) {
+//     matrix.print(std::cout);
+// }
+
+// template void print_matrix<CalibratorOi::mattype>(CalibratorOi::mattype matrix);
+// template void print_matrix<CalibratorOi::cxtype>(CalibratorOi::cxtype matrix);
+void gridppOI::debug(std::string string) {
+    std::cout << string << std::endl;
+}
+
+void gridppOI::error(std::string string) {
+    std::cout << string << std::endl;
+}
+bool gridppOI::optimal_interpolation(const vec2& input,
+        const vec2& blats,
+        const vec2& blons,
+        const vec2& belevs,
+        const vec2& blafs,
+        const vec& pobs,  // gObs
+        const vec& pci,   // gCi
+        const vec& plats,
+        const vec& plons,
+        const vec& pelevs,
+        const vec& plafs,
+        float minRho,
+        float hlength,
+        float vlength,
+        float wmin,
+        float maxElevDiff,
+        bool landOnly,
+        int maxLocations,
+        float elevGradient,
+        float epsilon,
+        vec2& output) {
+    std::cout << "Starting" << std::endl;
+    int nY = input.size();
+    int nX = input[0].size();
+    output.resize(nY);
+    for(int y = 0; y < nY; y++) {
+        output[y].resize(nX);
+    }
+
+    int mX = 10;
+    int mY = 10;
+    float MV = -999;
+
+    // Find the grid configuration: regular or irregular
+    // For regular grids, we can do certain optimizations
+    int gS = pobs.size();
+    float gridSize = getDistance(blats[0][0], blons[0][0], blats[1][0], blons[1][0], false);
+    std::stringstream ss;
+    ss << "Grid size: " << gridSize << " m";
+    debug(ss.str());
+    bool isRegularGrid = isValid(gridSize);
+
+    // Loop over each observation, find the nearest gridpoint and place the obs into all gridpoints
+    // in the vicinity of the nearest neighbour. This is only meant to be an approximation, but saves
+    // considerable time instead of doing a loop over each grid point and each observation.
+
+    // Store the indicies (into the gLocations array) that a gridpoint has available
+    std::vector<std::vector<std::vector<int> > > gLocIndices; // Y, X, obs indices
+    std::vector<float> pYi(gS, MV);
+    std::vector<float> pXi(gS, MV);
+    gLocIndices.resize(nY);
+    for(int y = 0; y < nY; y++) {
+        gLocIndices[y].resize(nX);
+    }
+
+    // Calculate the factor that the horizontal decorrelation scale should be multiplied by
+    // to get the localization radius. For minRho=0.0013, the factor is 3.64
+    float radiusFactor = sqrt(-2*log(minRho));
+
+    // Spread each observation out to this many gridpoints from the nearest neighbour
+
+    // Check that we do not run out of memory
+    int gridpointRadius = MV;
+    gridpointRadius = radiusFactor * hlength / gridSize;
+
+    // For each gridpoint, find which observations are relevant. Parse the observations and only keep
+    // those that pass certain checks
+    vec blats0(nX * nY);
+    vec blons0(nX * nY);
+    int count = 0;
+    for(int x = 0; x < nX; x++) {
+        for(int y = 0; y < nY; y++) {
+            blats0[count] = blats[y][x];
+            blons0[count] = blons[y][x];
+            count++;
+        }
+    }
+    std::cout << "Before search tree" << std::endl;
+    gridppOI::KDTree searchTree(blats0, blons0);
+    std::cout << "Done search tree" << std::endl;
+    for(int i = 0; i < gS; i++) {
+        int index = searchTree.get_nearest_neighbour(plats[i], plons[i]);
+        // TODO: Check
+        int X = index / nY;
+        int Y = index % nY;
+        pYi[i] = Y;
+        pXi[i] = X;
+
+        // Check if the elevation of the station roughly matches the reference grid elevation
+        bool hasValidElev = !isValid(maxElevDiff) || isValid(pelevs[i]);
+        if(isValid(maxElevDiff) && hasValidElev) {
+            float elevDiff = abs(pelevs[i] - belevs[Y][X]);
+            hasValidElev = elevDiff < maxElevDiff;
+        }
+        if(hasValidElev) {
+            // Don't include an observation if it is in the ocean and landOnly=1
+            bool wrongLaf = isValid(plafs[i]) && landOnly && plafs[i] == 0;
+            if(!wrongLaf) {
+                for(int y = std::max(0, Y - gridpointRadius); y < std::min(nY, Y + gridpointRadius); y++) {
+                    for(int x = std::max(0, X - gridpointRadius); x < std::min(nX, X + gridpointRadius); x++) {
+                        gLocIndices[y][x].push_back(i);
+                    }
+                }
+            }
+        }
+    }
+    std::cout << "Done indexing" << std::endl;
+
+    // Transform the background
+    /*
+    #pragma omp parallel for
+    for(int x = 0; x < nX; x++) {
+        for(int y = 0; y < nY; y++) {
+            float value = input[y][x];
+            if(isValid(value))
+                input[y][x] = gridppOI::transform(value);
+        }
+    }
+    */
+
+    // Compute Y
+    vec gY(gS);
+    std::vector<float> gYhat(gS);
+    for(int i = 0; i < gS; i++) {
+        float elevCorr = 0;
+        if(isValid(elevGradient) && elevGradient != 0) {
+            float nnElev = belevs[pYi[i]][pXi[i]];
+            assert(isValid(nnElev));
+            assert(isValid(pelevs[i]));
+            float elevDiff = pelevs[i] - nnElev;
+            elevCorr = elevGradient * elevDiff;
+        }
+        float value = input[pYi[i]][pXi[i]];
+        // if(isValid(value)) {
+        value += elevCorr;
+        gY[i] = value;
+    }
+
+    #pragma omp parallel for
+    for(int x = 0; x < nX; x++) {
+        for(int y = 0; y < nY; y++) {
+            float lat = blats[y][x];
+            float lon = blons[y][x];
+            float elev = belevs[y][x];
+            float laf = blafs[y][x];
+
+            //
+            // Create list of locations for this gridpoint
+            //
+            std::vector<int> lLocIndices0 = gLocIndices[y][x];
+            std::vector<int> lLocIndices;
+            lLocIndices.reserve(lLocIndices0.size());
+            std::vector<std::pair<float,int> > lRhos0;
+            lRhos0.reserve(lLocIndices0.size());
+            for(int i = 0; i < lLocIndices0.size(); i++) {
+                int index = lLocIndices0[i];
+                float hdist = getDistance(plats[index], plons[index], lat, lon, true);
+                float vdist = MV;
+                if(isValid(pelevs[index] && isValid(elev)))
+                    vdist = pelevs[index] - elev;
+                float lafdist = 0;
+                if(isValid(plafs[index]) && isValid(laf))
+                    lafdist = plafs[index] - laf;
+                float rho = gridppOI::calcRho(hdist, vdist, lafdist, hlength, vlength, wmin);
+                int X = pXi[index];
+                int Y = pYi[index];
+                // Only include observations that are within the domain
+                if(X > 0 && X < blats[0].size()-1 && Y > 0 && Y < blats.size()-1) {
+                    if(rho > minRho) {
+                        lRhos0.push_back(std::pair<float,int>(rho, i));
+                    }
+                }
+            }
+
+            arma::vec lRhos;
+            if(lRhos0.size() > maxLocations) {
+                // If sorting is enabled and we have too many locations, then only keep the best ones based on rho.
+                // Otherwise, just use the last locations added
+                lRhos = arma::vec(maxLocations);
+                std::sort(lRhos0.begin(), lRhos0.end(), gridppOI::sort_pair_first<float,int>());
+                for(int i = 0; i < maxLocations; i++) {
+                    // The best values start at the end of the array
+                    int index = lRhos0[lRhos0.size() - 1 - i].second;
+                    lLocIndices.push_back(lLocIndices0[index]);
+                    lRhos(i) = lRhos0[lRhos0.size() - 1 - i].first;
+                }
+            }
+            else {
+                lRhos = arma::vec(lRhos0.size());
+                for(int i = 0; i < lRhos0.size(); i++) {
+                    int index = lRhos0[i].second;
+                    lLocIndices.push_back(lLocIndices0[index]);
+                    lRhos(i) = lRhos0[i].first;
+                }
+            }
+
+            int lS = lLocIndices.size();
+
+            if(lS == 0) {
+                // If we have too few observations though, then use the background
+                output[y][x] = input[y][x];
+                continue;
+            }
+
+            vectype lObs(lS);
+            vectype lElevs(lS);
+            vectype lLafs(lS);
+            for(int i = 0; i < lLocIndices.size(); i++) {
+                int index = lLocIndices[i];
+                lObs[i] = pobs[index];
+                lElevs[i] = pelevs[index];
+                lLafs[i] = plafs[index];
+            }
+
+            // Compute Y (model at obs-locations)
+            vectype lY(lS);
+
+            for(int i = 0; i < lS; i++) {
+                // Use the nearest neighbour for this location
+                int index = lLocIndices[i];
+                lY(i) = gY[index];
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////////////
+            // Single-member mode:                                                                //
+            // Revert to static structure function when there is not enough ensemble information  //
+            ////////////////////////////////////////////////////////////////////////////////////////
+            // Current grid-point to station error covariance matrix
+            mattype lG(1, lS, arma::fill::zeros);
+            // Station to station error covariance matrix
+            mattype lP(lS, lS, arma::fill::zeros);
+            // Station variance
+            mattype lR(lS, lS, arma::fill::zeros);
+            for(int i = 0; i < lS; i++) {
+                int index = lLocIndices[i];
+                lR(i, i) = pci[index];
+                float hdist = getDistance(plats[index], plons[index], lat, lon, true);
+                float vdist = MV;
+                if(isValid(pelevs[index] && isValid(elev)))
+                    vdist = pelevs[index] - elev;
+                float lafdist = 0;
+                if(isValid(plafs[index]) && isValid(laf))
+                    lafdist = plafs[index] - laf;
+                float rho = calcRho(hdist, vdist, lafdist, hlength, vlength, wmin);
+                lG(0, i) = rho;
+                for(int j = 0; j < lS; j++) {
+                    int index_j = lLocIndices[j];
+                    float hdist = getDistance(plats[index], plons[index], plats[index_j], plons[index_j], true);
+                    float vdist = MV;
+                    if(isValid(pelevs[index] && isValid(pelevs[index_j])))
+                        vdist = pelevs[index] - pelevs[index_j];
+                    float lafdist = 0;
+                    if(isValid(plafs[index]) && isValid(laf))
+                        lafdist = plafs[index] - plafs[index_j];
+
+                    lP(i, j) = gridppOI::calcRho(hdist, vdist, lafdist, hlength, vlength, wmin);
+                }
+            }
+            mattype lGSR;
+            lGSR = lG * arma::inv(lP + epsilon * epsilon * lR);
+
+            vectype currFcst = lY;
+            vectype dx = lGSR * (lObs - currFcst);
+            output[y][x] = input[y][x] + dx[0];
+        }
+    }
+
+    // Back-transform
+    /*
+    #pragma omp parallel for
+    for(int x = 0; x < nX; x++) {
+        for(int y = 0; y < nY; y++) {
+            float value = (*output)(y, x, e);
+            if(isValid(value))
+                (*output)(y, x, e) = invTransform(value);
+        }
+    }
+    */
+    return true;
+}
+float gridppOI::calcRho(float iHDist, float iVDist, float iLDist, float hlength, float vlength, float wmin) {
+   float h = (iHDist/hlength);
+   float rho = exp(-0.5 * h * h);
+   if(isValid(vlength)) {
+      if(!isValid(iVDist)) {
+         rho = 0;
+      }
+      else {
+         float v = (iVDist/vlength);
+         rho *= exp(-0.5 * v * v);
+      }
+   }
+   if(isValid(wmin)) {
+      rho *= 1 - (1 - wmin) * std::abs(iLDist);
+   }
+   return rho;
+}
+float gridppOI::getDistance(float lat1, float lon1, float lat2, float lon2, bool approx) {
+   if(!isValid(lat1) || !isValid(lat2) ||
+      !isValid(lon1) || !isValid(lon2)) {
+      return -999;
+   }
+   if(!(fabs(lat1) <= 90 && fabs(lat2) <= 90 && fabs(lon1) <= 360 && fabs(lon2) <= 360)) {
+      std::stringstream ss;
+      ss  <<" Cannot calculate distance, invalid lat/lon: (" << lat1 << "," << lon1 << ") (" << lat2 << "," << lon2 << ")";
+      error(ss.str());
+   }
+
+   if(lat1 == lat2 && lon1 == lon2)
+      return 0;
+
+   double lat1r = deg2rad(lat1);
+   double lat2r = deg2rad(lat2);
+   double lon1r = deg2rad(lon1);
+   double lon2r = deg2rad(lon2);
+   // Calculate distance according to: http://www.movable-type.co.uk/scripts/latlong.html
+   double radiusEarth = 6.378137e6;
+   if(approx) {
+      float dx2 = pow(cos((lat1r+lat2r)/2),2)*(lon1r-lon2r)*(lon1r-lon2r);
+      float dy2 = (lat1r-lat2r)*(lat1r-lat2r);
+      return radiusEarth*sqrt(dx2+dy2);
+   }
+   else {
+      double ratio = cos(lat1r)*cos(lon1r)*cos(lat2r)*cos(lon2r)
+                   + cos(lat1r)*sin(lon1r)*cos(lat2r)*sin(lon2r)
+                   + sin(lat1r)*sin(lat2r);
+      double dist = acos(ratio)*radiusEarth;
+      return (float) dist;
+   }
+}
+bool gridppOI::isValid(float iValue) {
+    return !std::isnan(iValue) && !std::isinf(iValue) && iValue != -999;
+}
+float gridppOI::deg2rad(float deg) {
+   float pi = 3.14159265;
+   return (deg * pi / 180);
+}
+float gridppOI::rad2deg(float rad) {
+   float pi = 3.14159265;
+   return (rad * 180 / pi);
+}
+/*
+float transform(float iValue) const {
+   if(mTransformType == TransformTypeNone)
+      return iValue;
+
+   if(iValue <= 0)
+      iValue = 0;
+   if(mLambda == 0)
+      return log(iValue);
+   else
+      return (pow(iValue, mLambda) - 1) / mLambda;
+}
+
+float CalibratorOi::invTransform(float iValue) const {
+   if(mTransformType == TransformTypeNone)
+      return iValue;
+
+   float rValue = 0;
+   if(mLambda == 0)
+      rValue = exp(iValue);
+   else {
+      if(iValue < -1.0 / mLambda) {
+         iValue = -1.0 / mLambda;
+      }
+      rValue = pow(1 + mLambda * iValue, 1 / mLambda);
+   }
+   if(rValue <= 0)
+      rValue = 0;
+   return rValue;
+}
+*/
