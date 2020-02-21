@@ -54,7 +54,9 @@ int gridppOI::optimal_interpolation(const vec2& input,
     // Estimate the grid spacing
     float gridSize = getDistance(blats[0][0], blons[0][0], blats[1][0], blons[1][0], false);
     std::stringstream ss;
-    ss << "Grid size: " << gridSize << " m";
+    ss << "Estimated grid size: " << gridSize << " m" << std::endl;
+    ss << "Number of observations: " << nS << std::endl;
+    ss << "Number of gridpoints: " << nY << " " << nX;
     debug(ss.str());
 
     // Loop over each observation, find the nearest gridpoint and place the obs into all gridpoints
@@ -89,9 +91,9 @@ int gridppOI::optimal_interpolation(const vec2& input,
         }
     }
 
-    std::cout << "Before search tree" << std::endl;
+    std::cout << "Computing search tree..." << std::endl;
     gridppOI::KDTree searchTree(blats0, blons0);
-    std::cout << "Done search tree" << std::endl;
+    std::cout << "Done computing search tree" << std::endl;
 
     // For each gridpoint, find which observations are relevant. Parse the observations and only keep
     // those that pass certain checks
@@ -121,7 +123,7 @@ int gridppOI::optimal_interpolation(const vec2& input,
             }
         }
     }
-    std::cout << "Done indexing" << std::endl;
+    std::cout << "Done assigning observations to gridpoints" << std::endl;
 
     // Transform the background
     // #pragma omp parallel for
