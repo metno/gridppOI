@@ -4,7 +4,7 @@
 #include <armadillo>
 #include <assert.h>
 
-bool gridppOI::optimal_interpolation(const vec2& input,
+int gridppOI::optimal_interpolation(const vec2& input,
         const vec2& blats,
         const vec2& blons,
         const vec2& belevs,
@@ -288,7 +288,7 @@ bool gridppOI::optimal_interpolation(const vec2& input,
         }
     }
     */
-    return true;
+    return 0;
 }
 float gridppOI::calcRho(float iHDist, float iVDist, float iLDist, float hlength, float vlength, float wmin) {
    float h = (iHDist/hlength);

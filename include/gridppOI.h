@@ -32,8 +32,10 @@ namespace gridppOI {
      *  @param elevGradient Vertical temperature gradient used to move from grid to point [*C/m]
      *  @param epsilon Ratio of observation to background error
      *  @param output Write analysis field to this matrix
+     *
+     *  @return error code, 0 successful, non-0 not successful
     **/
-    bool optimal_interpolation(const vec2& input,
+    int optimal_interpolation(const vec2& input,
             const vec2& blats,
             const vec2& blons,
             const vec2& belevs,
