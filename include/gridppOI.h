@@ -2,7 +2,11 @@
 #include <set>
 #include <string>
 #include <armadillo>
-#include <libalglib/interpolation.h>
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/geometries/box.hpp>
+
+#include <boost/geometry/index/rtree.hpp>
 typedef std::vector<std::vector<float> > vec2;
 typedef std::vector<float> vec;
 // typedef std::vector<float> fvec;
@@ -139,10 +143,15 @@ namespace gridppOI {
              *  @param z_coord z-coordinate [m]
              * */
             static bool convert_coordinates(float lat, float lon, float& x_coord, float& y_coord, float& z_coord);
-
+            static float deg2rad(float deg);
+            static float calc_distance(float lat1, float lon1, float lat2, float lon2);
+            static float calc_distance(float x0, float y0, float z0, float x1, float y1, float z1);
         private:
-            alglib::kdtree mTree;
-            static alglib::real_1d_array ll2ar(float lat, float lon);
-
+            typedef boost::geometry::model::point<float, 3, boost::geometry::cs::cartesian> point;
+            typedef std::pair<point, unsigned> value;
+            typedef boost::geometry::model::box<point> box;
+            vec mLats;
+            vec mLons;
+            boost::geometry::index::rtree< value, boost::geometry::index::quadratic<16> > mTree;
     };
 }

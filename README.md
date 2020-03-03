@@ -4,10 +4,10 @@ OI algorithm from gridpp in a standalone C++ library
 
 ## Required dependencies
 
-You need to install swig:
+Here are installation instructions for Ubuntu Bionic. First, install the pre-requisites:
 
 ```
-sudo apt install swig doxygen
+sudo apt install swig doxygen libboost-dev libproj-dev cmake libgsl-dev python3-setuptools python3-nose python3-numpy python3-scipy
 ```
 
 ## Installation of library
